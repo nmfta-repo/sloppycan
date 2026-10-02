@@ -731,12 +731,21 @@ function isoEtpIngestDT(parsed, data, ts) {
 function j1939DispatchPGN(pgn, sa, da, data, ts, fromTP) {
   const pgnKey = `${pgn}:${sa}`;
 
+  // Handle Address Claim if dispatched here
+  if (pgn === 0xEE00) {
+    const name = j1939DecodeName(data);
+    if (name) {
+      j1939AddrMap.set(sa, { sa, ts, data: Array.from(data), ...name });
+      j1939Dirty = true;
+    }
+  }
+
   // Handle DM1/DM2
   if (pgn === 0xFECA || pgn === 0xFECB) {
     const dtcs = j1939DecodeDTCs(data);
     const entry = j1939DmMap.get(sa) || {};
-    if (pgn === 0xFECA) { entry.dm1 = dtcs; entry.dm1ts = ts; }
-    else                { entry.dm2 = dtcs; entry.dm2ts = ts; }
+    if (pgn === 0xFECA) { entry.dm1 = dtcs; entry.dm1ts = ts; entry.dm1Data = Array.from(data); }
+    else                { entry.dm2 = dtcs; entry.dm2ts = ts; entry.dm2Data = Array.from(data); }
     j1939DmMap.set(sa, entry);
   }
 
@@ -770,7 +779,7 @@ function j1939IngestFrame(frame) {
   if (pgn === 0xEE00) {
     const name = j1939DecodeName(data);
     if (name) {
-      j1939AddrMap.set(sa, { sa, ts, ...name });
+      j1939AddrMap.set(sa, { sa, ts, data: Array.from(data), ...name });
       j1939Dirty = true;
     }
     return;
@@ -1287,16 +1296,20 @@ function j1939RenderDM() {
     <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;font-family:var(--sans)">
       SA 0x${j1939H(sa)} - ${saName}
     </div>`;
-    for (const [type, dtcs, ts] of [['dm1',entry.dm1,entry.dm1ts],['dm2',entry.dm2,entry.dm2ts]]) {
+    for (const [type, dtcs, ts, rawMsgData] of [
+      ['dm1', entry.dm1, entry.dm1ts, entry.dm1Data],
+      ['dm2', entry.dm2, entry.dm2ts, entry.dm2Data]
+    ]) {
       if (!dtcs) continue;
       html += `<div style="margin-bottom:8px">
       <span class="j1939-fault-badge ${type}">${type.toUpperCase()}</span>
-      <span style="font-size:10px;color:var(--text3);margin-left:6px;font-family:var(--sans)">${ts ? j1939RelTs(ts) : ''} - ${dtcs.length} fault${dtcs.length!==1?'s':''}</span>`;
+      <span style="font-size:10px;color:var(--text3);margin-left:6px;font-family:var(--sans)">${ts ? j1939RelTs(ts) : ''} - ${dtcs.length} fault${dtcs.length!==1?'s':''}</span>
+      <span class="j-raw" style="margin-left:10px" title="Raw message payload">Raw: ${rawMsgData ? j1939BytesHtml(rawMsgData) : '-'}</span>`;
       if (!dtcs.length) {
         html += `<span style="font-size:11px;color:var(--green);margin-left:10px;font-family:var(--sans)">No active faults</span>`;
       } else {
         html += `<table class="j1939-tbl" style="margin-top:4px">
-        <thead><tr><th>SPN</th><th>FMI</th><th>Description</th><th>Count</th></tr></thead>
+        <thead><tr><th>SPN</th><th>FMI</th><th>Description</th><th>Count</th><th>Raw Data</th></tr></thead>
         <tbody>` + dtcs.map(d => {
           // Deep-link the SPN to dtc.html (reconstruct the 4-byte DM record).
           const rec = [d.spn & 0xFF, (d.spn >> 8) & 0xFF, (((d.spn >> 16) & 0x7) << 5) | (d.fmi & 0x1F), d.oc & 0x7F];
@@ -1306,6 +1319,7 @@ function j1939RenderDM() {
           <td class="j-ts">${d.fmi}</td>
           <td class="j-name">${d.fmiDesc}</td>
           <td class="j-ts">${d.oc}</td>
+          <td class="j-raw" title="Raw 4-byte DTC record (hex)">${d.raw ? j1939BytesHtml(d.raw) : rec.map(x => j1939H(x)).join(' ')}</td>
         </tr>`; }).join('') + '</tbody></table>';
       }
       html += '</div>';
@@ -1323,7 +1337,7 @@ function j1939RenderAddr() {
   el.innerHTML = `<table class="j1939-tbl">
   <thead><tr>
     <th>SA</th><th>Function</th><th>Industry</th><th>ECU Instance</th>
-    <th>Mfr Code</th><th>Arb. Addr</th><th>Last seen</th>
+    <th>Mfr Code</th><th>Arb. Addr</th><th>Last seen</th><th>Raw Data</th>
   </tr></thead>
   <tbody>` +
   [...j1939AddrMap.values()].sort((a,b)=>a.sa-b.sa).map(e => `<tr>
@@ -1338,6 +1352,7 @@ function j1939RenderAddr() {
     <td class="j-ts">0x${j1939H(e.mfrCode,3)}</td>
     <td class="j-ts">${e.arbitrary ? 'Yes' : 'No'}</td>
     <td class="j-ts">${j1939RelTs(e.ts)}</td>
+    <td class="j-raw" title="Raw 8-byte NAME (hex)">${e.data ? j1939BytesHtml(e.data) : '-'}</td>
   </tr>`).join('') +
   '</tbody></table>';
 }
