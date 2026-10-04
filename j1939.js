@@ -1120,7 +1120,20 @@ function j1939SendRequest() {
   const daEl  = document.getElementById('j1939ReqDa');
   const pgn = window.canParseIntAuto ? window.canParseIntAuto(pgnEl ? pgnEl.value : '') : NaN;
   if (!Number.isFinite(pgn) || pgn > 0xFFFFFF) { j1939ReqNote(0, 'not a PGN'); return; }
-  const da = daEl ? (parseInt(daEl.value, 10) & 0xFF) : 0xFF;
+
+  let da = 0xFF;
+  if (daEl) {
+    const raw = (daEl.value || '').trim();
+    if (!raw || /^(every|global)/i.test(raw)) {
+      da = 0xFF;
+    } else {
+      const m = raw.match(/^(0x[0-9a-fA-F]+|\d+)/);
+      const token = m ? m[1] : raw;
+      const v = window.canParseIntAuto ? window.canParseIntAuto(token) : parseInt(token, 10);
+      if (!Number.isFinite(v) || v < 0 || v > 255) { j1939ReqNote(pgn, 'invalid destination address'); return; }
+      da = v & 0xFF;
+    }
+  }
   // The readout is set BEFORE the frame goes out, because the frame comes straight back through
   // ingestFrame and the server writes the OUTCOME over it in the same call stack. Noting it
   // afterwards would report "requested" every time and hide the answer.
@@ -1329,8 +1342,33 @@ function j1939RenderDM() {
   el.innerHTML = html;
 }
 
+// Keep the PGN request destination dropdown options in sync with claimed CAs
+function j1939UpdateDaList() {
+  const dl = document.getElementById('j1939ReqDaList');
+  if (!dl) return;
+  const staticOpts = [
+    { val: '255', label: 'every ECU (global / 0xFF)' },
+    { val: '0x00', label: '0x00 Engine #1' },
+    { val: '0xF0', label: '0xF0 Tractor ECU' },
+  ];
+  const seen = new Set(['255', '0', '0x00', '240', '0xF0', '0xf0']);
+  const dynamicOpts = [];
+  if (typeof j1939AddrMap !== 'undefined' && j1939AddrMap.size) {
+    for (const [sa, info] of j1939AddrMap.entries()) {
+      const saHex = '0x' + j1939H(sa);
+      if (seen.has(String(sa)) || seen.has(saHex) || seen.has(saHex.toLowerCase())) continue;
+      seen.add(String(sa));
+      seen.add(saHex);
+      const name = info.fnName || j1939SaLabel(sa) || 'ECU';
+      dynamicOpts.push({ val: saHex, label: `${saHex} ${name}` });
+    }
+  }
+  dl.innerHTML = [...staticOpts, ...dynamicOpts].map(o => `<option value="${o.val}">${o.label}</option>`).join('');
+}
+
 // Address Claim - SA → device identity table
 function j1939RenderAddr() {
+  j1939UpdateDaList();
   const el = document.getElementById('j1939-addr');
   if (!j1939AddrMap.size) { el.innerHTML = '<div class="j1939-empty">No Address Claim (PGN 0xEE00) messages received.<br>Devices broadcast their identity when joining the bus.</div>'; return; }
 
